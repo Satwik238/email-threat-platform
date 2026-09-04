@@ -228,7 +228,19 @@ function normalizeAiResponse(response, fallback) {
   normalized.classification = getClassification(normalized.threatScore);
   return normalized;
 }
+function extractSender(emailText) {
+  const fromMatch = emailText.match(/from:\s*([^\n]+)/i);
 
+  if (fromMatch) {
+    return fromMatch[1].trim();
+  }
+
+  const emailMatch = emailText.match(
+    /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i
+  );
+
+  return emailMatch ? emailMatch[0] : 'Unknown';
+}
 async function buildAnalysis(emailText) {
   const local = analyzeEmailLocally(emailText);
   const ai = await getAiInsight(emailText);
@@ -237,8 +249,8 @@ async function buildAnalysis(emailText) {
   return {
     ...merged,
     threatScore: Math.min(100, Math.round((local.threatScore + merged.threatScore) / 2)),
-    sender: 'unknown',
-    ip: '203.0.113.45',
+    sender: extractSender(emailText),
+    ip: '8.8.8.8',
     spf: local.threatScore >= 50 ? 'FAIL' : 'PASS',
     dkim: local.threatScore >= 50 ? 'FAIL' : 'PASS',
     dmarc: local.threatScore >= 60 ? 'REVIEW' : 'PASS',
@@ -291,26 +303,30 @@ const fallbackIpData = {
 app.get('/api/geolocate', async (req, res) => {
   const ip = (req.query.ip || '8.8.8.8').toString().trim();
 
-  if (process.env.IPINFO_API_TOKEN) {
-    try {
-      const response = await fetch(`https://ipinfo.io/${ip}/json?token=${process.env.IPINFO_API_TOKEN}`);
-      if (response.ok) {
-        const data = await response.json();
+  try {
+    const response = await fetch(
+      `https://ipapi.co/${encodeURIComponent(ip)}/json/`
+    );
+
+    if (response.ok) {
+      const data = await response.json();
+
+      if (!data.error) {
         return res.json({
           ip: data.ip || ip,
-          country: data.country || 'Unknown',
+          country: data.country_name || 'Unknown',
           region: data.region || 'Unknown',
           city: data.city || 'Unknown',
-          org: data.org || 'Unknown',
-          latitude: data.loc ? data.loc.split(',')[0] : '0.0000',
-          longitude: data.loc ? data.loc.split(',')[1] : '0.0000',
-          risk: data.country === 'India' ? 'Suspicious' : 'Low',
-          source: 'ipinfo.io'
+          org: data.org || 'Unknown ISP',
+          latitude: data.latitude ?? '0.0000',
+          longitude: data.longitude ?? '0.0000',
+          risk: 'Review',
+          source: 'ipapi.co'
         });
       }
-    } catch (error) {
-      console.warn('IPInfo lookup failed; using fallback dataset.', error.message);
     }
+  } catch (error) {
+    console.warn('Geolocation lookup failed:', error.message);
   }
 
   const fallback = fallbackIpData[ip] || {
